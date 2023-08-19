@@ -5,11 +5,11 @@ using System.Collections.Generic;
 
 public class MyBot : IChessBot
 {
-	readonly int[] pieceValues = { 100, 300, 300, 450, 950, 10000 };
+    readonly int[] pieceValues = { 200, 600, 600, 900, 1900, 100000 };
 
-	// Thanks http://www.talkchess.com/forum3/viewtopic.php?f=2&t=68311&start=19
-	//Piece-Square Table  [EG-MG][Piece Type][Rank * 8 + File]
-	/*	int[][][] PSQTable = new int[2][][]{
+    // Thanks http://www.talkchess.com/forum3/viewtopic.php?f=2&t=68311&start=19
+    //Piece-Square Table  [EG-MG][Piece Type][Rank * 8 + File]
+    /*	int[][][] PSQTable = new int[2][][]{
 		new int[6][] {
 			new int[64] {
 				0,   0,   0,   0,   0,   0,  0,   0,
@@ -136,9 +136,9 @@ public class MyBot : IChessBot
 		}
 	};*/
 
-	// Thanks https://rustic-chess.org/search/ordering/mvv_lva.html
-	// Most Valuable Victim, Least Valuable Attacker
-	/*int[,] MVV_LVA = new int[5, 6]{
+    // Thanks https://rustic-chess.org/search/ordering/mvv_lva.html
+    // Most Valuable Victim, Least Valuable Attacker
+    /*int[,] MVV_LVA = new int[5, 6]{
 	    {15, 14, 13, 12, 11, 10}, // victim P, attacker P, N, B, R, Q, K
 	    {25, 24, 23, 22, 21, 20}, // victim N, attacker P, N, B, R, Q, K
 	    {35, 34, 33, 32, 31, 30}, // victim B, attacker P, N, B, R, Q, K
@@ -146,141 +146,161 @@ public class MyBot : IChessBot
 	    {55, 54, 53, 52, 51, 50}, // victim Q, attacker P, N, B, R, Q, K
 	};*/
 
-	Dictionary<ulong, (int value, int depth, Stack<Move> bestMoves)> TT = new();
-    Stack<Move> BestMoves;
-	Board board;
-	Timer timer;
-	DateTime IDStartTime;
-	TimeSpan searchSpan;
+    Dictionary<ulong, (bool isValid, int flag, int value, int depth, Move[] principalVariation)> TT = new();
+    List<Move> PrincipalVariationMoves;
+    Board board;
+    Timer timer;
+    DateTime searchStartTime;
+    TimeSpan searchSpan;
+    bool abortSearch = false;
     float endGameWeight;
-	int[] piecesStartingFiles = new int[8]{1, 2, 0, 3, 6, 5, 7, 3};
-	bool abortSearch = false;
+    int[] piecesStartingFiles = new int[8] { 1, 2, 0, 3, 6, 5, 7, 3 };
     int infinity = 50000
-		,maxDepth
-		,smthng = 0
-		,smthng2 = 0
-		,smthng3 = 0;
+        , maxDepth
+        , smthng = 0
+        , smthng2 = 0
+        , smthng3 = 0;
 
-	public Move Think(Board board, Timer timer)
-	{
+    public Move Think(Board board, Timer timer)
+    {
         this.board = board;
-		this.timer = timer;
+        this.timer = timer;
 
-		int numEnemyPieces = 0;
-		Enumerable.Range(1, 5).ToList().ForEach(x => numEnemyPieces += board.GetPieceList((PieceType)x, !board.IsWhiteToMove).Count);
-		endGameWeight = Math.Clamp( Map(numEnemyPieces, 0, 12, 1.3f, 0f), 0, 1.3f);
+        int numEnemyPieces = 0;
+        Enumerable.Range(1, 5).ToList().ForEach(x => numEnemyPieces += board.GetPieceList((PieceType)x, !board.IsWhiteToMove).Count);
+        endGameWeight = Math.Clamp(Map(numEnemyPieces, 0, 12, 1.3f, 0f), 0, 1.3f);
 
-		Console.WriteLine(board.ZobristKey);
-		Console.WriteLine( "Ply: " + board.PlyCount + "\tEvaluation: " + Evaluate() * (board.IsWhiteToMove ? 1 : -1) + "\tEndgame weight: " + endGameWeight);
+        Console.WriteLine($"\n{board.GetFenString()}");
+        Console.WriteLine("Ply: " + board.PlyCount + "\tEvaluation: " + Evaluate() * (board.IsWhiteToMove ? 1 : -1) + "\tEndgame weight: " + endGameWeight); //#DEBUG
 
-		float secs = Map(timer.MillisecondsRemaining, ChessChallenge.Application.Settings.GameDurationMilliseconds, 0, 8f, 2f);
+        float secs = board.PlyCount <= 4 ? 8 : Map(timer.MillisecondsRemaining, ChessChallenge.Application.Settings.GameDurationMilliseconds, 0, 8f, 1.5f);
+        return IterativeDeepening(new TimeSpan(0, 0, 0, (int)Math.Floor(secs), (int)(secs % 1 * 100)));
+    }
 
-		return IterativeDeepening(new TimeSpan(0, 0, 0, (int)Math.Floor(secs), (int)(secs % 1 * 100)));
-	}
+    Move IterativeDeepening(TimeSpan span)
+    {
+        abortSearch = false;
+        searchStartTime = DateTime.Now;
+        searchSpan = span;
+        for (maxDepth = 1; maxDepth <= (board.PlyCount <= 4 ? 4 : 20); maxDepth++)
+        {
+            var (score, depthBestMoves) = NegaMax(0, maxDepth, -infinity, infinity);
 
-	Move IterativeDeepening(TimeSpan span)
-	{
-		IDStartTime = DateTime.Now;
-		searchSpan = span;
-		for (maxDepth = 1; maxDepth <= 4; maxDepth++)
-		{
-			TT.Clear();
-            var (score, depthBestMoves) = NegaMax(maxDepth, -infinity, infinity);
+            if (depthBestMoves.Count == 0)
+                break;
+            PrincipalVariationMoves = depthBestMoves;
+            if (abortSearch)
+                break;
 
-			if(depthBestMoves.Count != 0)
-				BestMoves = depthBestMoves;
-			if (abortSearch)
-				break;
+            Console.WriteLine("Depth: " + maxDepth + "\t" + PrincipalVariationMoves[0] + "\t" + score + "\t" + timer.MillisecondsElapsedThisTurn + "\t" + smthng + "\t" + smthng2 + "\t" + smthng3); //#DEBUG
+            smthng = 0; //#DEBUG
+            smthng2 = 0; //#DEBUG
+            smthng3 = 0; //#DEBUG
+        }
+        return PrincipalVariationMoves[0];
+    }
 
-			Console.WriteLine("Depth: " + maxDepth + "\t" + BestMoves.Peek() + "\t" + score + "\t" + timer.MillisecondsElapsedThisTurn + "\t" + smthng + "\t" + smthng2 + "\t" + smthng3);
-			smthng = 0;
-			smthng2 = 0;
-			smthng3 = 0;
-		}
-		return BestMoves.Peek();
-	}
-
-    (int score, Stack<Move> bestMoves) NegaMax(int depth, int alpha, int beta)
-	{
-        if(DateTime.Now - IDStartTime >= searchSpan)
-		{
+    (int score, List<Move> bestMoves) NegaMax(int ply, int depth, int alpha, int beta)
+    {
+        if (DateTime.Now - searchStartTime >= searchSpan && maxDepth > 3)
+        {
             abortSearch = true;
-            return (0, new Stack<Move>());
+            return (0, new());
         }
 
-        //#DEBUG
-		smthng++;
+        smthng++; //#DEBUG
 
-        if (depth == 0 || board.IsInCheckmate())
-            return (-Evaluate(), new Stack<Move>());// new SearchOut { score = -QuiesceSearch(alpha, beta) };
+        var ttEntry = TT.FirstOrDefault(x => x.Key == board.ZobristKey).Value;
+        if (ttEntry.isValid && ttEntry.depth >= depth)
+        {
+            if (ttEntry.flag == 0)
+                return (ttEntry.value, ttEntry.principalVariation.ToList());
+            else if (-ttEntry.flag == 1)
+                alpha = Math.Max(alpha, ttEntry.value);
+            else if (ttEntry.flag == -1)
+                beta = Math.Min(beta, ttEntry.value);
 
-		Move[] moves = OrderBestMoves(board.GetLegalMoves().ToList(), maxDepth - depth);
-		if (moves.Length == 0)
-            return (board.IsInCheck() ? infinity : 0, new Stack<Move>()); //new SearchOut { score = infinity } : new SearchOut { score = 0 };
+            if (alpha >= beta)
+                return (ttEntry.value, ttEntry.principalVariation.ToList());
+        }
+        if (depth == 0)
+            return (Evaluate(), new());
+        
+        Move[] moves = OrderBestMoves(board.GetLegalMoves().ToList(), ply);
+        if (moves.Length == 0)
+            return (board.IsInCheck() ? -infinity : infinity - 1, new());
 
-		int numChecks = 0,
-			numCaptures = 0,
-			bestEval = -infinity;
-        Stack<Move> bestMoves = new();
-		for (int i = 0; i < moves.Length; i++)
-		{
-			if (moves[i].IsCapture)
-				numCaptures++;
+        int alphaOrig = alpha,
+            numChecks = 0,
+            numCaptures = 0,
+            bestEval = -infinity;
+        List<Move> bestMoves = new();
+        for (int i = 0; i < moves.Length; i++)
+        {
+            if (moves[i].IsCapture)
+                numCaptures++;
 
-			board.MakeMove(moves[i]);
+            board.MakeMove(moves[i]);
 
-			var (score, searchBestMoves) = NegaMax(depth - 1, -beta, -alpha);
+            var (score, searchBestMoves) = NegaMax(ply + 1, depth - 1, -beta, -alpha);
+            score *= -1;
+            if (abortSearch)
+                return (bestEval, bestMoves);
 
             if (board.IsInCheck())
-				numChecks++;
-			
-			if (board.GameRepetitionHistory.Any(x => x == board.ZobristKey) && depth == maxDepth)
-				score -= infinity / 2 - 1;
-			
-			board.UndoMove(moves[i]);
+                numChecks++;
 
-			if (score > bestEval)
-			{
-				bestEval = score;
-				if (searchBestMoves.Count == 0)
-					bestMoves.Clear();
-				else
-					bestMoves = searchBestMoves;
-				bestMoves.Push(moves[i]);
-			}
-            if (abortSearch)
-                return (-bestEval, bestMoves);
+            if (board.GameRepetitionHistory.Any(x => x == board.ZobristKey) && ply == 0)
+                score = (infinity - 1) * (board.IsWhiteToMove? -1 : 1);
+
+            board.UndoMove(moves[i]);
+
+            if (score > bestEval)
+            {
+                bestEval = score;
+                if (searchBestMoves.Count == 0)
+                    bestMoves.Clear();
+                else
+                    bestMoves = searchBestMoves;
+                bestMoves.Insert(0, moves[i]);
+            }
             alpha = Math.Max(alpha, score);
+            if (alpha >= beta)
+                break;
+        }
+        if (numChecks >= 2 || numCaptures > 3 || endGameWeight >= .8f || depth <= 1)
+            bestEval = Math.Max(bestEval, QuiesceSearch(alpha, beta, 8));
 
-			if (alpha >= beta)
-				break;
-		}
+        ttEntry.value = bestEval;
+        ttEntry.flag = bestEval <= alphaOrig ? -1 : bestEval >= beta ? 1 : 0;
+        ttEntry.principalVariation = bestMoves.ToArray();
+        ttEntry.depth = depth;
 
-		if (numChecks >= 2 || numCaptures > 3 || endGameWeight >= .8f || depth <= 1)
-			bestEval = Math.Max(bestEval, QuiesceSearch(alpha, beta, 5));
+        if(!TT.ContainsKey(board.ZobristKey) || TT.ContainsKey(board.ZobristKey) && depth > TT[board.ZobristKey].depth)
+            TT[board.ZobristKey] = ttEntry;
 
-        return (-bestEval, bestMoves);
+        return (bestEval, bestMoves);
     }
 
     // Thanks https://www.chessprogramming.org/Quiescence_Search
     int QuiesceSearch(int alpha, int beta, int depth)
     {
-		smthng2++;
+        smthng2++; //#DEBUG
         int stand_pat = Evaluate();
-		if (depth == 0)
-			return stand_pat;
+        if (depth == 0)
+            return stand_pat;
 
         if (stand_pat >= beta)
             return beta;
         if (alpha < stand_pat)
             alpha = stand_pat;
 
-		Move[] moves = OrderMoves(board.GetLegalMoves(true).ToList());
-        for(int i = 0; i < moves.Length; i++)
+        Move[] moves = OrderMoves(board.GetLegalMoves(true).ToList());
+        for (int i = 0; i < moves.Length; i++)
         {
             board.MakeMove(moves[i]);
             int score = -QuiesceSearch(-beta, -alpha, depth - 1);
-			board.UndoMove(moves[i]);
+            board.UndoMove(moves[i]);
 
             if (score >= beta)
                 return beta;
@@ -291,53 +311,56 @@ public class MyBot : IChessBot
     }
 
     int Evaluate()
-	{
-		int whiteEval = 0, blackEval = 0;
-		for (int i = 1; i < 6; i++)
-		{
-			whiteEval += EvaluatePieceList(board.GetPieceList((PieceType)i, true)); 
-			blackEval += EvaluatePieceList(board.GetPieceList((PieceType)i, false));
-		}
-		return (whiteEval - blackEval) * (board.IsWhiteToMove ? 1 : -1);
-	}
+    {
+        int whiteEval = 0, blackEval = 0;
+        for (int i = 1; i < 6; i++)
+        {
+            whiteEval += EvaluatePieceList(board.GetPieceList((PieceType)i, true));
+            blackEval += EvaluatePieceList(board.GetPieceList((PieceType)i, false));
+        }
+        return (whiteEval - blackEval) * (board.IsWhiteToMove ? 1 : -1);
+    }
 
-	int EvaluatePieceList(PieceList list)
-	{
-		if(list == null || list.Count == 0)
-			return 0; 
+    int EvaluatePieceList(PieceList list)
+    {
+        if (list == null || list.Count == 0)
+            return 0;
 
-		int listVal = 0;
-		for (int i = 0, pieceVal = 0; i < list.Count; i++, listVal += pieceVal)
-		{
-			Piece piece = list.GetPiece(i);
+        int listVal = 0;
+        for (int i = 0, pieceVal = 0; i < list.Count; i++, listVal += pieceVal)
+        {
+            Piece piece = list.GetPiece(i);
 
-			bool skipped = false;
-			pieceVal = pieceValues[(int)piece.PieceType - 1];
+            bool skipped = false;
+            pieceVal = pieceValues[(int)piece.PieceType - 1];
 
-			if (piece.Square.Rank == (piece.IsWhite ? 0 : 7)
-				&& ((int)list.TypeOfPieceInList == 1 || piece.Square.File == piecesStartingFiles[(int)piece.PieceType - 2] || piece.Square.File == piecesStartingFiles[(int)piece.PieceType + 2]))
-				pieceVal = (int)(pieceVal / 1.1f);
+            // Decrease the piece value if it hasn't left its home square
+            if (piece.Square.Rank == (piece.IsWhite ? 0 : 7)
+                && ((int)list.TypeOfPieceInList == 1 || piece.Square.File == piecesStartingFiles[(int)piece.PieceType - 2] || piece.Square.File == piecesStartingFiles[(int)piece.PieceType + 2]))
+                pieceVal = (int)(pieceVal / 1.4f);
 
-			if (board.IsWhiteToMove != piece.IsWhite)
-			{
-				skipped = true;
-				board.ForceSkipTurn();
-			}
+            if (board.IsWhiteToMove != piece.IsWhite)
+            {
+                skipped = true;
+                board.ForceSkipTurn();
+            }
 
-			int numMoves = 0;
-			Move[] legalMoves = board.GetLegalMoves().ToList().FindAll(x => x.MovePieceType == piece.PieceType && x.StartSquare == piece.Square).ToArray();
-			foreach (var move in legalMoves) 
-			{ 
-				if (!board.SquareIsAttackedByOpponent(move.TargetSquare))
-				{
-					numMoves++;
-					pieceVal += 5;
-					if (piece.PieceType == PieceType.Pawn)
-						pieceVal += 5;
-				}
-		}
+            int numMoves = 0;
+            // Increase the piece value for each unattacked square it can move to, and each undefended piece it's attacking
+            Move[] legalMoves = board.GetLegalMoves().ToList().FindAll(x => x.MovePieceType == piece.PieceType && x.StartSquare == piece.Square).ToArray();
+            foreach (var move in legalMoves)
+                if (!board.SquareIsAttackedByOpponent(move.TargetSquare))
+                    numMoves+= move.IsCapture? 4 : 2;
+
+            // If the piece doesn't have any safe squares to move to, its value is decreased
             if (numMoves == 0)
-                pieceVal = (int)(pieceVal / 1.1f);
+                pieceVal = (int)(pieceVal / 1.2f);
+            else
+                pieceVal += numMoves * 2;
+            // The only move a pawn can make is to move up the board, which would potentially lead to promotion
+            // Also, increase the value of a pawn by how close it's to promotion, i.e. the rank of the piece
+            if (piece.PieceType == PieceType.Pawn)
+                pieceVal += numMoves + (piece.IsWhite? piece.Square.Rank : 7 - piece.Square.Rank) * 5;
 
             if (skipped)
                 board.UndoSkipTurn();
@@ -345,15 +368,92 @@ public class MyBot : IChessBot
         return listVal;
     }
 
-    // Thanks https://www.chessprogramming.org/Static_Exchange_Evaluation
-    int EvaluateCaptures(Move parentMove, int depth)
+    // PV Ordering
+    Move[] OrderBestMoves(List<Move> moves, int ply)
     {
-		smthng3++;
-        if (!board.SquareIsAttackedByOpponent(parentMove.TargetSquare) || depth == 0)
+        if (PrincipalVariationMoves != null && moves.Count != 0 && ply < PrincipalVariationMoves.Count)
+        {
+            Move bestMove = PrincipalVariationMoves.ToArray()[ply];
+            if (moves.Contains(bestMove))
+            {
+                moves.RemoveAt(moves.IndexOf(bestMove));
+                OrderMoves(moves);
+                moves.Insert(0, bestMove);
+                return moves.ToArray();
+            }
+        }
+        return OrderMoves(moves);
+    }
+
+    Move[] OrderMoves(List<Move> moves)
+    {
+        int[] scores = new int[moves.Count];
+        Enumerable.Range(0, moves.Count).ToList().ForEach(x => scores[x] = ScoreMove(moves[x]));
+        return scores.Zip(moves, (score, move) => new { Score = score, Move = move }).OrderByDescending(data => data.Score).ToList().Select(data => data.Move).ToArray();
+    }
+
+    int ScoreMove(Move move)
+    {
+        int score = 0;
+
+        // Promotion
+        if (move.IsPromotion)
+            score += 300;
+
+        // Castling
+        if (move.IsCastles)
+            score += 300;
+
+        // PSQ table
+        // score += PSQTable[endGame >= .9f? 1 : 0][(int)move.MovePieceType - 1][move.TargetSquare.Index];
+
+        board.MakeMove(move);
+
+        // Captures
+        if (move.IsCapture)
+            score += ((int)move.CapturePieceType * 10 + (6 - (int)move.MovePieceType)) * 5 - ScoreCapture(move, 8);//MVV_LVA[(int)move.CapturePieceType - 1, (int)move.MovePieceType - 1];
+
+        Move[] kingLegalMoves = board.GetLegalMoves().ToList().FindAll(x => x.MovePieceType == PieceType.King).ToArray();
+        score -= (int)(kingLegalMoves.Length * 5 * endGameWeight);
+        for (int j = 0; j < kingLegalMoves.Length; j++)
+        {
+            Square opponentKSquare = board.GetKingSquare(!board.IsWhiteToMove);
+            Square kSquare = board.GetKingSquare(board.IsWhiteToMove);
+
+            // Minimize the distance between the kings
+            score -= (int)((Math.Abs(kSquare.File - opponentKSquare.File) + Math.Abs(kSquare.Rank - opponentKSquare.Rank)) * 30 * (endGameWeight < .8f? 0 : endGameWeight));
+            // Push the enemy king to the edge of the board
+            score -= (int)((Math.Abs(kingLegalMoves[j].TargetSquare.File - (opponentKSquare.File < 4 ? 0 : 7)) + Math.Abs(kingLegalMoves[j].TargetSquare.Rank - (opponentKSquare.Rank < 4 ? 0 : 7))) * 100 * (endGameWeight < .8f ? 0 : endGameWeight));
+        }
+
+        // Rate move based on the value of the undefended pieces that will be attacked
+        board.ForceSkipTurn();
+        Move[] movedPieceLegalMoves = board.GetLegalMoves(true).ToList().FindAll(x => x.MovePieceType == move.MovePieceType && x.StartSquare == move.TargetSquare).ToArray();
+        foreach (var pieceMove in movedPieceLegalMoves)
+            if (!board.SquareIsAttackedByOpponent(pieceMove.TargetSquare))
+                score += pieceValues[(int)pieceMove.CapturePieceType - 1];
+        board.UndoSkipTurn();
+
+        // Encourage moves that lead to checkmate, discourage stalemate and draw moves
+        if (board.IsInCheckmate())
+            score = infinity;
+        else if (board.IsDraw() || board.IsInStalemate())
+            score = -infinity;
+        board.UndoMove(move);
+
+        return score;
+    }
+
+    // Thanks https://www.chessprogramming.org/Static_Exchange_Evaluation
+    int ScoreCapture(Move parentMove, int depth)
+    {
+        smthng3++; //#DEBUG
+
+        if (depth == 0)
             return 0;
+
         int value = 0;
         Move[] sqCaptures = board.GetLegalMoves(true).ToList().FindAll(x => x.TargetSquare == parentMove.TargetSquare).ToArray();
-
         Move move = Move.NullMove;
         for (int lowestPiece = infinity, i = 0; i < sqCaptures.Length; i++)
         {
@@ -365,88 +465,12 @@ public class MyBot : IChessBot
         }
 
         board.MakeMove(move);
-        value = (int)move.CapturePieceType * 10 + (6 - (int)move.MovePieceType) - EvaluateCaptures(move, depth - 1);
+        value = ((int)move.CapturePieceType * 10 + (6 - (int)move.MovePieceType)) * 5 - ScoreCapture(move, depth - 1);
         board.UndoMove(move);
 
         return value;
     }
 
-    // PV Ordering
-    Move[] OrderBestMoves(List<Move> moves, int depth)
-	{
-		if (BestMoves != null && moves.Count != 0 && depth < BestMoves.Count)
-		{
-			Move bestMove = BestMoves.ToArray()[depth];
-			if (moves.Contains(bestMove))
-			{
-				moves.RemoveAt(moves.IndexOf(bestMove));
-				OrderMoves(moves);
-				moves.Insert(0, bestMove);
-				return moves.ToArray();
-            }
-		}
-		return OrderMoves(moves);
-	}
-
-	Move[] OrderMoves(List<Move> moves)
-	{
-        int[] scores = new int[moves.Count];
-        Enumerable.Range(0, moves.Count).ToList().ForEach(x => scores[x] = ScoreMove(moves[x]));
-		var hell = scores.Zip(moves, (score, move) => new { Score = score, Move = move }).OrderByDescending(data => data.Score).ToList().Select(data => data.Move).ToArray();
-        return hell;
-    }
-
-    int ScoreMove(Move move)
-	{
-		int score = 0;
-		// Captures
-		if (move.IsCapture)
-			score += (int)move.CapturePieceType * 10 + (6 - (int)move.MovePieceType) - EvaluateCaptures(move, 5);//MVV_LVA[(int)move.CapturePieceType - 1, (int)move.MovePieceType - 1];
-
-		// Promotion
-		if (move.IsPromotion)
-			score += 150;
-
-		// Castling
-		if (move.IsCastles)
-			score += 50;
-
-		// PSQ table
-		// score += PSQTable[endGame >= .9f? 1 : 0][(int)move.MovePieceType - 1][move.TargetSquare.Index];
-
-		board.MakeMove(move);
-		
-		Move[] kingLegalMoves = board.GetLegalMoves().ToList().FindAll(x => x.MovePieceType == PieceType.King).ToArray();
-		score -= (int)(kingLegalMoves.Length * 5 * endGameWeight);
-		for (int j = 0; j < kingLegalMoves.Length; j++)
-		{
-			Square opponentKSquare = board.GetKingSquare(!board.IsWhiteToMove);
-			Square kSquare = board.GetKingSquare(board.IsWhiteToMove);
-
-			// Minimize the distance between the kings
-			score -= (int)((Math.Abs(kSquare.File - opponentKSquare.File) + Math.Abs(kSquare.Rank - opponentKSquare.Rank)) * 10 * endGameWeight);
-			// Push the enemy king to the edge of the board
-			score -= (int)((Math.Abs(kingLegalMoves[j].TargetSquare.File - (opponentKSquare.File < 4 ? 0 : 7)) + Math.Abs(kingLegalMoves[j].TargetSquare.Rank - (opponentKSquare.Rank < 4 ? 0 : 7))) * 100 * endGameWeight);
-		}
-
-		// Rate move based on the value of the undefended pieces attacked
-		board.ForceSkipTurn();
-		Move[] movedPieceLegalMoves = board.GetLegalMoves(true).ToList().FindAll(x => x.MovePieceType == move.MovePieceType && x.StartSquare == move.TargetSquare).ToArray();
-		foreach (var pieceMove in movedPieceLegalMoves)
-			if (!board.SquareIsAttackedByOpponent(pieceMove.TargetSquare))
-				score += (int)(pieceValues[(int)pieceMove.CapturePieceType - 1] / 20f);
-		board.UndoSkipTurn();
-
-		// Encourage moves that lead to checkmate, discourage stalemate and draw
-		if (board.IsInCheckmate())
-			score = infinity;
-		else if (board.IsDraw() || board.IsInStalemate())
-			score = -infinity;
-		board.UndoMove(move);
-
-		return score;
-	}    
-
     static float Map(float s, float a1, float a2, float b1, float b2) => b1 + (s - a1) * (b2 - b1) / (a2 - a1);
-	// float inverseLerp(float a, float b, float v) => (v - a) / (b - a);
+    // float inverseLerp(float a, float b, float v) => (v - a) / (b - a);
 }
