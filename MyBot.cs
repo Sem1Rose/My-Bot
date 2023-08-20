@@ -146,7 +146,7 @@ public class MyBot : IChessBot
 	    {55, 54, 53, 52, 51, 50}, // victim Q, attacker P, N, B, R, Q, K
 	};*/
 
-    Dictionary<ulong, (bool isValid, int flag, int value, int depth, Move[] principalVariation)> TT = new();
+    static Dictionary<ulong, (bool isValid, int flag, int value, int depth, Move[] principalVariation)> TT = new();
     List<Move> PrincipalVariationMoves;
     Board board;
     Timer timer;
@@ -228,7 +228,7 @@ public class MyBot : IChessBot
         
         Move[] moves = OrderBestMoves(board.GetLegalMoves().ToList(), ply);
         if (moves.Length == 0)
-            return (board.IsInCheck() ? -infinity : infinity - 1, new());
+            return (board.IsInCheck()? -infinity : infinity - 1, new());
 
         int alphaOrig = alpha,
             numChecks = 0,
@@ -251,7 +251,7 @@ public class MyBot : IChessBot
                 numChecks++;
 
             if (board.GameRepetitionHistory.Any(x => x == board.ZobristKey) && ply == 0)
-                score = (infinity - 1) * (board.IsWhiteToMove? -1 : 1);
+                score = (-infinity + 1) * (board.IsWhiteToMove ? -1 : 1);
 
             board.UndoMove(moves[i]);
 
@@ -269,7 +269,7 @@ public class MyBot : IChessBot
                 break;
         }
         if (numChecks >= 2 || numCaptures > 3 || endGameWeight >= .8f || depth <= 1)
-            bestEval = Math.Max(bestEval, QuiesceSearch(alpha, beta, 8));
+            bestEval = Math.Max(bestEval, -QuiesceSearch(alpha, beta, 8));
 
         ttEntry.value = bestEval;
         ttEntry.flag = bestEval <= alphaOrig ? -1 : bestEval >= beta ? 1 : 0;
@@ -333,7 +333,7 @@ public class MyBot : IChessBot
 
             bool skipped = false;
             pieceVal = pieceValues[(int)piece.PieceType - 1];
-
+            
             // Decrease the piece value if it hasn't left its home square
             if (piece.Square.Rank == (piece.IsWhite ? 0 : 7)
                 && ((int)list.TypeOfPieceInList == 1 || piece.Square.File == piecesStartingFiles[(int)piece.PieceType - 2] || piece.Square.File == piecesStartingFiles[(int)piece.PieceType + 2]))
@@ -400,9 +400,14 @@ public class MyBot : IChessBot
         if (move.IsPromotion)
             score += 300;
 
+        // Don't encourage the king to move
+        if (move.MovePieceType == PieceType.King)
+            score -= 150;
+
         // Castling
+        // reward if the move is castling, removes the penelty of king movement above
         if (move.IsCastles)
-            score += 300;
+            score += 450;
 
         // PSQ table
         // score += PSQTable[endGame >= .9f? 1 : 0][(int)move.MovePieceType - 1][move.TargetSquare.Index];
