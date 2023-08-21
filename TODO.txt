@@ -1,5 +1,2 @@
-INCREASE THE SPEED OF THE PROGRAM
-rewatch SebLague's second chess engine vid to get inspiration
 Try and implement PV search instead of negamax, maybe explore negascout as well and find out what the hell is it
-Try and decrease the token count from 1800 back to 1024 again, the submission is due in a month
-Try and tune the scoremove function and the static evaluation/static capture evaluation functions to give more accurate results so the program doesn't blunder the queen and think that's a white advantage when it's actually not
+Include the new quiescence search in the next update
