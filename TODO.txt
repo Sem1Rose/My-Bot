@@ -1,2 +1,3 @@
 Try and implement PV search instead of negamax, maybe explore negascout as well and find out what the hell is it
-Include the new quiescence search in the next update
+Add more checks to the evaluation method, like the distance between the king and the edge of the board, or the distance between the two kings
+

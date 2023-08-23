@@ -22,7 +22,6 @@ public class MyBot : IChessBot
             73949978050619586491881614568m, 77043619187199676893167803647m, 1212557245150259869494540530m, 3081561358716686153294085872m, 3392217589357453836837847030m, 1219782446916489227407330320m, 78580145051212187267589731866m, 75798434925965430405537592305m,
             68369566912511282590874449920m, 72396532057599326246617936384m, 75186737388538008131054524416m, 77027917484951889231108827392m, 73655004947793353634062267392m, 76417372019396591550492896512m, 74568981255592060493492515584m, 70529879645288096380279255040m,
     };
-
     #endregion
 
     #region variables
@@ -34,15 +33,6 @@ public class MyBot : IChessBot
             depth, 
             value; 
         public Move bestMove;
-
-        public TTEntry(ulong _hashCode, int _flag, int _depth, int _value, Move _bestMove)
-        {
-            hashCode = _hashCode;
-            flag = _flag;
-            depth = _depth;
-            value = _value;
-            bestMove = _bestMove;
-        }
     }
     TTEntry[] TT;
     Board board;
@@ -53,19 +43,21 @@ public class MyBot : IChessBot
     //                      P   N    B    R    Q    K
     short[] PieceValues = { 82, 337, 365, 477, 1025, 0, // Middlegame
                             94, 281, 297, 512,  936, 0 }; // Endgame
-    int[] PiecePhaseVal = { 0, 2, 3, 4, 10, 0 },
+    int[] PiecePhaseVal = {  0,   2,   3,   4,   10, 0 },
         hhScore,
         bfScore;
     int[][] PSQTable;
-    
-    bool abortSearch = false;
-    bool ContinueSearch => timer.MillisecondsElapsedThisTurn < timer.MillisecondsRemaining / 120;
+
+    bool white;
+    bool ContinueSearch => timer.MillisecondsElapsedThisTurn < Math.Clamp(timer.MillisecondsRemaining / 80, 700, 5000);
     
     ulong maxTTSize = 0x2FFFFF;
     
     int infinity = 999999,
         maxDepth,
         maxHHandBFSize = 0x8FFFFF;
+    int min(int a, int b) => Math.Min(a, b);
+    int max(int a, int b) => Math.Max(a, b);
 
 #if ENABLE_DEBUG && DEBUG_EVERYTHING 
     string logFilePath = @"D:\Chess Challenge\Debug.txt"; //#DEBUG
@@ -96,6 +88,7 @@ public class MyBot : IChessBot
     {
         board = _board;
         timer = _timer;
+        white = board.IsWhiteToMove;
 
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
         StreamWriter writer = new StreamWriter(logFilePath, true); //#DEBUG
@@ -107,22 +100,21 @@ public class MyBot : IChessBot
         Console.WriteLine($"Ply: {board.PlyCount}\tEvaluation: {Evaluate() * (board.IsWhiteToMove ? 1 : -1)}"); //#DEBUG
 #endif
 
-        if (timer.MillisecondsRemaining < 500)
-            return board.GetLegalMoves()[0];
-
-        hhScore = bfScore = new int[maxHHandBFSize];
-        abortSearch = false;
         BestMove = board.GetLegalMoves()[0];
+        if (timer.MillisecondsRemaining < 500) return BestMove;
+        hhScore = bfScore = new int[maxHHandBFSize];
         maxDepth = 0;
         while (ContinueSearch)
-            if (abortSearch || NegaMax(0, ++maxDepth, -infinity, infinity, 0) >= infinity) break;
+            if (NegaMax(0, ++maxDepth, -infinity, infinity, 0) >= infinity || !ContinueSearch) 
+                break;
 #if ENABLE_DEBUG
-        Console.WriteLine($"Finished at Depth: {maxDepth + (abortSearch ? -1 : 0)} in: {timer.MillisecondsElapsedThisTurn}\tBest Move: {BestMove}\n"); //#DEBUG
+        Console.WriteLine($"Finished at Depth: {maxDepth + (ContinueSearch ? -1 : 0)} in: {timer.MillisecondsElapsedThisTurn}\tBest Move: {BestMove}\n"); //#DEBUG
 #endif
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
         // fix pls
         writer.Flush(); //#DEBUG
         writer.Close(); //#DEBUG
+        Console.SetOut(Console.Out);
 #endif
         return BestMove;
     }
@@ -141,7 +133,6 @@ public class MyBot : IChessBot
 
         if (!ContinueSearch)
         {
-            abortSearch = true;
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
             Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
             Console.WriteLine($"search aborted at: {timer.MillisecondsElapsedThisTurn}\tmax Depth: {maxDepth}\tdepth: {depth}\tply: {ply}"); //#DEBUG
@@ -149,7 +140,7 @@ public class MyBot : IChessBot
             return 0;
         }
 
-        if (board.IsInsufficientMaterial() || board.IsFiftyMoveDraw() || board.IsRepeatedPosition()) return 0;
+        if (board.IsRepeatedPosition() || board.IsInsufficientMaterial() || board.IsFiftyMoveDraw()) return 0;
         if (moves.Length == 0) return board.IsInCheck() ? -infinity : 0;
 
         var ttEntry = TT[posHashKey % maxTTSize];
@@ -160,16 +151,16 @@ public class MyBot : IChessBot
             Console.WriteLine($"found in TT, key: {posHashKey}\tTTdepth: {ttEntry.depth}\tTTScore: {ttEntry.value}\tTTbest Move: {ttEntry.bestMove}\tflag: {ttEntry.flag}"); //#DEBUG
 #endif
             if (ttEntry.flag == 0) return ttEntry.value;
-            else if (ttEntry.flag == 1) alpha = Math.Max(alpha, ttEntry.value);
-            else if (ttEntry.flag == 2) beta = Math.Min(beta, ttEntry.value);
+            else if (ttEntry.flag == 1) alpha = max(alpha, ttEntry.value);
+            else if (ttEntry.flag == 2) beta = min(beta, ttEntry.value);
             if (alpha >= beta) return ttEntry.value;
         }
 
         if (depth <= 0)
         {
             bestEval = Evaluate();
-            if (bestEval >= beta || depth < -5) return bestEval;
-            alpha = Math.Max(alpha, bestEval);
+            if (bestEval >= beta || depth < -7) return bestEval;
+            alpha = max(alpha, bestEval);
         }
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
         Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
@@ -185,7 +176,7 @@ public class MyBot : IChessBot
             move = moves[i];
             moveHash = move.GetHashCode() % maxHHandBFSize;
             doRHH = bfScore[moveHash] != 0;
-            scores[i] = -(move == ttEntry.bestMove ? infinity : move.IsCapture ? (int)move.CapturePieceType * 100 + (6 - (int)move.MovePieceType) * 100 : doRHH? 100 * hhScore[moveHash] / bfScore[moveHash] : move.IsPromotion? 500 : move.IsCastles? 200 : 0); 
+            scores[i] = -(move == ttEntry.bestMove ? infinity : move.IsCapture ? (int)move.CapturePieceType * 100 + (6 - (int)move.MovePieceType) * 100 : doRHH? 10 * hhScore[moveHash] / bfScore[moveHash] : move.IsPromotion? 500 : move.IsCastles? 200 : 0); 
         }
         Array.Sort(scores, moves);
 
@@ -204,7 +195,7 @@ public class MyBot : IChessBot
             board.MakeMove(move);
             int ext = numExtens <5 && board.IsInCheck()? 1 : 0;
             int score = -NegaMax(ply + 1, depth + ext - 1, -beta, -alpha, numExtens + ext);
-            if (depth > 0 && abortSearch)
+            if (depth > 0 && !ContinueSearch)
             {
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
                 Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
@@ -212,12 +203,12 @@ public class MyBot : IChessBot
 #endif
                 return bestEval;
             }
-            board.UndoMove(move);
-
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
             Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
             Console.WriteLine($"move: {move}\tmax depth: {maxDepth}\tdepth: {depth}\tply: {ply}\tscore: {score}\tbest eval: {bestEval}\tbest move: {bestMove}"); //#DEBUG
 #endif
+            board.UndoMove(move);
+
             if (score > bestEval)
             {
                 bestEval = score;
@@ -235,45 +226,43 @@ public class MyBot : IChessBot
                     BestMove = move;
                 }
             }
-            alpha = Math.Max(alpha, score);
+            alpha = max(alpha, score);
             if (alpha >= beta)
             {
+#if ENABLE_DEBUG && DEBUG_EVERYTHING
+                Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
+                Console.WriteLine($"snipping after move: {move}\tmax depth: {maxDepth}\tdepth: {depth}\tply: {ply}\tscore: {score}"); //#DEBUG
+#endif
                 if (!move.IsCapture)
                     hhScore[moveHash] += depth * depth;
                 break;
             }else if (!move.IsCapture)
                 bfScore[moveHash] += depth * depth;
         }
-
-        if (TT[posHashKey % maxTTSize].hashCode != posHashKey || depth > TT[posHashKey % maxTTSize].depth)
-        {
 #if ENABLE_DEBUG && DEBUG_EVERYTHING
             Enumerable.Range(0, ply + 1).ToList().ForEach(x => Console.Write("\t")); //#DEBUG
             Console.WriteLine($"Adding to TT at {posHashKey}\tscore: {bestEval}\tmove: {bestMove}\tdepth: {depth}"); //#DEBUG
 #endif
-            TT[posHashKey % maxTTSize] = new TTEntry(posHashKey, bestEval <= alphaOrig ? 2 : bestEval >= beta ? 1 : 0, depth, bestEval, bestMove);
-        }
-
+        TT[posHashKey % maxTTSize] = new TTEntry { hashCode = posHashKey, flag = bestEval <= alphaOrig ? 2 : bestEval >= beta ? 1 : 0, depth = depth, value = bestEval, bestMove = bestMove };
+        
         return bestEval;
     }
 
     int Evaluate()
     {
         int mg = 0, eg = 0, phase = 0;
-
         for (int square = 0; square < 64; ++square)
         {
             Piece piece = board.GetPiece(new Square(square));
             if (piece.IsNull) continue;
-
             int pieceIdx = (int)piece.PieceType - 1;
             mg += piece.IsWhite ? PSQTable[square ^ 56][pieceIdx] : -PSQTable[square][pieceIdx];
             eg += piece.IsWhite ? PSQTable[square ^ 56][pieceIdx + 6] : -PSQTable[square][pieceIdx + 6];
             phase += PiecePhaseVal[pieceIdx];
         }
-        phase = Math.Min(phase, 56);
+        phase = min(phase, 56) / 56;
 
-        return (board.IsWhiteToMove ? 1 : -1) * ((mg * phase + eg * (56 - phase)) / 56);
+        return (board.IsWhiteToMove ? 1 : -1) * (mg * phase + eg * (1 - phase));
     }
     #endregion
 }
