@@ -20,31 +20,21 @@ public class MyBot : IChessBot
 
     #region variables
 
-    struct TTEntry
-    {
-        public ulong hashCode;
-        public int flag,
-            depth,
-            value;
-        public Move bestMove;
-    }
-    TTEntry[] TT = new TTEntry[maxTTSize];
+    (ulong/*hashCode*/, int/*flag*/, int/*depth*/, int/*score*/, Move/*move*/)[] TT = new (ulong, int, int, int, Move)[0x2FFFFF];
     Board board;
     Timer timer;
     Move BestMove;
+    Move[] killers = new Move[32];
 
     // Thanks http://www.talkchess.com/forum3/viewtopic.php?f=2&t=68311&start=19
     //                       P    N    B    R     Q   K
     short[] PieceValues = {  82, 281, 365, 477, 1025, 0, // Middlegame
                             100, 220, 297, 512, 1250, 0 }; // Endgame
-    int[] hhScore;
-    int[][] PSQTable;
-    bool ContinueSearch => timer.MillisecondsElapsedThisTurn < Math.Clamp(timer.MillisecondsRemaining / 80, 700, 1000);
-
-    const ulong maxTTSize = 0x2FFFFF;
-
     int infinity = 999999,
-        maxHHandBFSize = 0x8FFFFF;
+        searchTime;
+    int[,,] hhScore;
+    int[][] PSQTable;
+    bool AbortSearch => timer.MillisecondsElapsedThisTurn > searchTime;
 
     #endregion
 
@@ -67,78 +57,70 @@ public class MyBot : IChessBot
     #region Think
     public Move Think(Board _board, Timer _timer)
     {
-        for (int i = 0; i < 5; i++)
-        {
-            Console.WriteLine(PieceValues[i] / 100);
-        }
         board = _board;
         timer = _timer;
 
-        BestMove = board.GetLegalMoves()[0];
-        if (timer.MillisecondsRemaining < 500)
-            return BestMove;
-        hhScore = new int[maxHHandBFSize];
-        int maxDepth = 0;
-        while (ContinueSearch)
-            NegaMax(0, ++maxDepth, -infinity, infinity, 0);
-        //Console.WriteLine($"FEN: {board.GetFenString()}\nPly {board.PlyCount}\tFinished at Depth: {maxDepth + (ContinueSearch ? -1 : 0)}\tin: {timer.MillisecondsElapsedThisTurn}\tBest Move: {BestMove}\n");
+        hhScore = new int[2,7,64];
+        killers = new Move[32];
+
+        searchTime = timer.MillisecondsRemaining / 50;
+
+        for (int depth = 2, score, alpha = -infinity, beta = infinity; depth < 32; depth++)
+        {
+            score = PVS(0, depth, -infinity, infinity);
+            if (AbortSearch)
+                break;
+            if (score <= alpha) 
+                alpha -= 1000;
+            else if (score >= beta)
+                beta += 1000;
+            else
+            {
+                alpha = score - 100; 
+                beta = score + 100;
+                depth++;
+            }
+        }
         return BestMove;
     }
     #endregion
 
-    #region NegaMax Eval
-    int NegaMax(int ply, int depth, int alpha, int beta, int numExtens)
+    #region PVsearch Eval
+    int PVS(int ply, int depth, int alpha, int beta)
     {
         ulong posHashKey = board.ZobristKey;
-        bool qsearch = depth <= 0;
-        var moves = board.GetLegalMoves(qsearch && !board.IsInCheck());
-        Move bestMove = Move.NullMove,
-             move;
-        int bestEval = -infinity - 1;
+        Move bestMove = default, move;
+        int bestEval = -infinity - 1, alphaOrig = alpha;
+        bool inCheck = board.IsInCheck();
 
-        if (!ContinueSearch) return 0;
+        if (AbortSearch) return 0;
         if (ply != 0 && board.IsRepeatedPosition()) return 0;
 
-        var ttEntry = TT[posHashKey % maxTTSize];
-        if (ttEntry.hashCode == posHashKey && ttEntry.depth >= depth)
-        {
-            if (ttEntry.flag == 0) return ttEntry.value;
-            else if (ttEntry.flag == 1) alpha = Math.Max(alpha, ttEntry.value);
-            else if (ttEntry.flag == 2) beta = Math.Min(beta, ttEntry.value);
-            if (alpha >= beta) return ttEntry.value;
-        }
+        var ttEntry = TT[posHashKey % 0x2FFFFF];
+        if (ply > 0 && ttEntry.Item1 == posHashKey && ttEntry.Item3 >= depth && 
+            (ttEntry.Item2 == 2 || ttEntry.Item2 == 1 && ttEntry.Item4 <= alpha || ttEntry.Item2 == 0 && ttEntry.Item4 >= beta)) 
+            return ttEntry.Item4;
 
+        if (inCheck) depth++;
+        bool qsearch = depth <= 0;
         if (qsearch)
         {
             bestEval = Evaluate();
-            if (bestEval >= beta) return bestEval;
+            if (bestEval >= beta) return beta;
             alpha = Math.Max(alpha, bestEval);
         }
 
-        var scores = new int[moves.Length];
-        for (int i = 0; i < moves.Length; i++)
-        {
-            move = moves[i];
-            board.MakeMove(move);
-            if (board.IsRepeatedPosition())
-            {
-                board.UndoMove(move);
-                scores[i] = -1;
-                continue;
-            }
-            board.UndoMove(move);
-            scores[i] = -(move == ttEntry.bestMove ? infinity : move.IsCapture ? 100 * (int)move.CapturePieceType - (int)move.MovePieceType : move.IsPromotion ? 1000 : move.IsCastles ? 200 : 2 * hhScore[move.GetHashCode() % maxHHandBFSize]);
-        }
-        Array.Sort(scores, moves);
+        var moves = board.GetLegalMoves(qsearch && !inCheck).OrderByDescending(x => x == ttEntry.Item5 ? infinity : x.IsCapture ? 10000 * (int)x.CapturePieceType - (int)x.MovePieceType : x == killers[ply]? 10000 : hhScore[ply & 1, (int)x.MovePieceType, x.TargetSquare.Index]).ToArray();
 
-        int alphaOrig = alpha;
-        for (int i = 0; i < moves.Length; i++)
+        for (int i = -1, score; ++i < moves.Length;)
         {
             move = moves[i];
             board.MakeMove(move);
-            int ext = numExtens < 5 && board.IsInCheck() ? 1 : 0;
-            int score = -NegaMax(ply + 1, depth + ext - 1, -beta, -alpha, numExtens + ext);
-            if (depth > 0 && !ContinueSearch)
+            bool fullS = i == 0 || qsearch;
+            score = -PVS(ply + 1, depth - 1, fullS? -beta :-alpha - 1, -alpha);
+            if (!fullS && score > alpha)
+                score = -PVS(ply + 1, depth - 1, -beta, -alpha);
+            if (depth > 0 && AbortSearch) 
                 return bestEval;
             board.UndoMove(move);
 
@@ -146,22 +128,26 @@ public class MyBot : IChessBot
             {
                 bestEval = score;
                 bestMove = move;
-                if (ply == 0)
+                if (ply == 0) 
                     BestMove = move;
                 alpha = Math.Max(alpha, score);
                 if (alpha >= beta)
                 {
                     if (!move.IsCapture)
-                        hhScore[move.GetHashCode() % maxHHandBFSize] += depth * depth;
+                    {
+                        hhScore[ply & 1, (int)move.MovePieceType, move.TargetSquare.Index] += depth * depth;
+                        killers[ply] = move;
+                    }
                     break;
                 }
             }
         }
-        if (!qsearch && moves.Length == 0) return board.IsInCheck() ? -infinity + ply : 0;
-        TT[posHashKey % maxTTSize] = new TTEntry { hashCode = posHashKey, flag = bestEval <= alphaOrig ? 2 : bestEval >= beta ? 1 : 0, depth = depth, value = bestEval, bestMove = bestMove };
-
+        if (!qsearch && moves.Length == 0) return inCheck? ply - infinity : 0;
+        TT[posHashKey % 0x2FFFFF] = new (posHashKey, bestEval >= beta ? 0 : bestEval <= alphaOrig ? 1 : 2, depth, bestEval, bestMove == default ? ttEntry.Item5 : bestMove);
+        
         return bestEval;
     }
+
     int Evaluate()
     {
         int mg = 0, eg = 0, phase = 0;
@@ -176,7 +162,7 @@ public class MyBot : IChessBot
         }
         phase = Math.Min(phase, 56);
 
-        return (board.IsWhiteToMove ? 1 : -1) * (mg * phase + eg * (56 - phase));
+        return (mg * phase + eg * (56 - phase)) * (board.IsWhiteToMove ? 1 : -1);
     }
     #endregion
 }
