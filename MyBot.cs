@@ -30,21 +30,20 @@ public class MyBot : IChessBot
 
 	// Thanks http://www.talkchess.com/forum3/viewtopic.php?f=2&t=68311&start=19
 	//                       P    N    B    R     Q   K
-	short[] PieceValues = {  82, 281, 365, 477, 1024, 0, // Middlegame
-							 95, 220, 297, 512, 1146, 0 }; // Endgame
-	int infinity = 999999,
-		searchTime,
-		phase;
+	short[] PieceValues = {  82, 281, 365, 477, 1024, 0, 	// Middlegame
+							 95, 220, 297, 512, 1146, 0 };  // Endgame
+	int searchTime;
 	int[,,] hhScore;
 	int[][] PSQTable;
 	bool AbortSearch => timer.MillisecondsElapsedThisTurn > searchTime;
 
 #if DEBUG_OUT
-	int nodes = 0, ttMisses = 0, maxDepth = 0, mateIn = -1; //#DEBUG
-	bool mateFound = false; //#DEBUG
+
+	int mateIn = -1, nodes = 0; //#DEBUG
+
 #endif
 
-#endregion
+	#endregion
 
 	#region Constructor
 
@@ -70,21 +69,37 @@ public class MyBot : IChessBot
 
 		hhScore = new int[2, 7, 64];
 
-		searchTime = timer.MillisecondsRemaining / 60;
-		int depth = 2, score, alpha = -infinity, beta = infinity;
-		while(true)
+		searchTime = timer.MillisecondsRemaining / 30;
+		int depth = 2, score, alpha = -999999, beta = 999999;
+
+#if DEBUG_OUT
+
+		mateIn = -1; //#DEBUG
+		nodes = 0; //#DEBUG
+		Console.WriteLine($"\ninfo score cp {Evaluate() * (board.IsWhiteToMove ? 1 : -1)}"); //#DEBUG
+
+#endif
+		while (true)
 		{
-			if (AbortSearch)
+			if (AbortSearch || depth > 32)
 				break;
-			score = PVS(0, depth, -infinity, infinity);
+			score = PVS(0, depth, -999999, 999999);
 			if (score <= alpha)
-				alpha -= 848;
+				alpha -= 1187;
 			else if (score >= beta)
-				beta += 848;
+				beta += 1187;
 			else
 			{
-				alpha = score - 98;
-				beta = score + 98;
+
+#if DEBUG_OUT
+
+				if (Math.Abs(score) > 9E5) //#DEBUG 
+					mateIn = (int)MathF.Ceiling((999999 - Math.Abs(score)) / 2f); //#DEBUG 
+				Console.WriteLine($"info depth {depth} time {timer.MillisecondsElapsedThisTurn} nodes {nodes} nps {(int)(nodes / (timer.MillisecondsElapsedThisTurn + 1f) * 1000)} score cp {score} {(mateIn == -1 ? "" : " score mate " + mateIn} pv {BestMove}"); //#DEBUG
+
+#endif
+				alpha = score - 35;
+				beta = score + 35;
 				depth++;
 			}
 		}
@@ -95,9 +110,16 @@ public class MyBot : IChessBot
 	#region PVsearch Eval
 	int PVS(int ply, int depth, int alpha, int beta, bool allowNMFP = true)
 	{
+
+#if DEBUG_OUT
+
+		nodes++; //#DEBUG
+
+#endif
+
 		ulong posHashKey = board.ZobristKey;
 		Move bestMove = default, move;
-		int bestEval = -infinity - 1, alphaOrig = alpha, eval = Evaluate(), movesTried = 0, R;
+		int bestEval = -999999 - 1, alphaOrig = alpha, eval = Evaluate(), movesTried = 0, score = 0;
 		bool inCheck = board.IsInCheck(), allowFP = false;
 
 		if (AbortSearch || ply != 0 && board.IsRepeatedPosition())
@@ -111,7 +133,7 @@ public class MyBot : IChessBot
 		if (inCheck)
 			depth++;
 
-		int CompressedPVS(int R, int alpha, int beta, bool NMFP = true) => -PVS(ply + 1, depth - R, alpha, beta, NMFP);
+		int CompressedPVS(int alpha, int beta, bool NMFP, int R = 1) => score = -PVS(ply + 1, depth - R, alpha, beta, NMFP);
 
 		bool qsearch = depth <= 0;
 		if (qsearch)
@@ -121,46 +143,43 @@ public class MyBot : IChessBot
 				return bestEval;
 			alpha = Math.Max(alpha, bestEval);
 		}
-		else if(beta - alpha == 1 && !inCheck/*no pruning while in check*/)
+		else if (beta - alpha == 1 && !inCheck)
 		{
-			if(depth > 4 && phase > 14 && allowNMFP)
+			if (eval - 205 * depth >= beta)
+				return eval;
+
+			if (allowNMFP && depth > 2)
 			{
 				board.ForceSkipTurn();
-				int score = CompressedPVS(depth > 6 ? 4 : 3, -beta, 1 - beta, false);
+				CompressedPVS(-beta, 1 - beta, false, 3);
 				board.UndoSkipTurn();
 				if (score >= beta)
-				{
-					depth -= 4;
-					if (depth <= 0)
-						return CompressedPVS(0, -beta, -alpha);
-				}
+					return score;
 			}
 
-			allowFP = depth == 2 && eval + 250 * depth <= alpha;
+			allowFP = depth <= 6 && eval + 59 * depth <= alpha;
 		}
 
 		var moves = board.GetLegalMoves(qsearch && !inCheck)
-			.OrderByDescending(x => x == ttEntry.Item5 ? infinity :
+			.OrderByDescending(x => x == ttEntry.Item5 ? 999999 :
 									x.IsPromotion ? 20000 :
 									x.IsCapture ? 10000 * (int)x.CapturePieceType - (int)x.MovePieceType :
-									x == killers[ply] ? 10000 : 
+									x == killers[ply] ? 10000 :
 									hhScore[ply & 1, (int)x.MovePieceType, x.TargetSquare.Index]).ToArray();
 
-		for (int i = -1, score; ++i < moves.Length; movesTried++)
+		for (int i = -1; ++i < moves.Length;)
 		{
-			R = 1;
 			move = moves[i];
-			if (allowFP && !(movesTried == 0 || move.IsCapture || move.IsPromotion || board.IsInCheck()))
+			if (allowFP && !(move.IsCapture || move.IsPromotion))
 				continue;
 			board.MakeMove(move);
-			if(move.IsPromotion && (int)move.PromotionPieceType != 5)
-				R = 3;
 
-			bool fullS = i == 0 || qsearch;
+			bool fullS = i == 0 || qsearch, allowNMP = movesTried++ > 5;
 
-			score = CompressedPVS(R, fullS ? -beta : -alpha - 1, -alpha, movesTried > 1);
+			CompressedPVS(fullS ? -beta : -alpha - 1, -alpha, allowNMP);
 			if (!fullS && alpha < score && score < beta)
-				score = CompressedPVS(R, -beta, -alpha, movesTried > 1);
+				CompressedPVS(-beta, -alpha, allowNMP);
+
 			if (AbortSearch)
 				return bestEval;
 
@@ -185,24 +204,23 @@ public class MyBot : IChessBot
 			}
 		}
 		if (!qsearch && moves.Length == 0)
-			return inCheck ? ply - infinity : 0;
-		TT[posHashKey % 0x4FFFFF] = new(posHashKey, bestEval >= beta ? 0 : bestEval <= alphaOrig ? 1 : 2, depth, bestEval, bestMove == default ? ttEntry.Item5 : bestMove);
+			return inCheck ? ply - 999999 : 0;
+		TT[posHashKey % 0x4FFFFF] = new(posHashKey, bestEval >= beta ? 0 : bestEval <= alphaOrig ? 1 : 2, depth, bestEval, bestMove);
 
 		return bestEval;
 	}
 
 	int Evaluate()
 	{
-		int mg = 0, eg = 0;
-		phase = 0;
-		for (int square = 0; square < 64; ++square)
+		int mg = 0, eg = 0, phase = 0;
+		for (int square = 0; square < 64; square++)
 		{
 			Piece piece = board.GetPiece(new Square(square));
 			if (piece.IsNull)
 				continue;
 			int pieceIdx = (int)piece.PieceType - 1;
 
-			mg += piece.IsWhite ? PSQTable[square ^ 56][pieceIdx] : -PSQTable[square][pieceIdx]; 
+			mg += piece.IsWhite ? PSQTable[square ^ 56][pieceIdx] : -PSQTable[square][pieceIdx];
 			eg += piece.IsWhite ? PSQTable[square ^ 56][pieceIdx + 6] : -PSQTable[square][pieceIdx + 6];
 			phase += PieceValues[pieceIdx] / 200;
 		}
